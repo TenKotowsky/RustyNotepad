@@ -12,8 +12,11 @@ struct HelloState {
     current_file_path: Option<String>,
     window_title: String,
     history: Arc<RwLock<Vec<String>>>,
-    undo: bool
+    redo_history: Arc<RwLock<Vec<String>>>,
+    undo: bool,
+    redo: bool,
 }
+
 fn set_current_file(data: &mut HelloState, path: Option<String>) {
     data.current_file_path = path.clone();
     if let Some(path_str) = path {
@@ -25,15 +28,30 @@ fn set_current_file(data: &mut HelloState, path: Option<String>) {
 
 pub struct KeyController;
 
-
 impl<W: Widget<HelloState>> Controller<HelloState, W> for KeyController {
     fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut HelloState, env: &Env) {
         if let Event::KeyDown(key_event) = event {
             if key_event.mods.ctrl() && key_event.key == druid::keyboard_types::Key::Character("z".into()) {
+                // Undo
                 let mut history = data.history.write().unwrap();
                 if let Some(last) = history.pop() {
+                    data.redo_history.write().unwrap().push(data.text.clone());
                     data.text = last;
-                    data.undo = true;
+                    data.redo = true;
+                }
+                if history.is_empty() {
+                    data.undo = false;
+                }
+            } else if key_event.mods.ctrl() && key_event.key == druid::keyboard_types::Key::Character("y".into()) {
+                // Redo
+                let mut redo_history = data.redo_history.write().unwrap();
+                if let Some(next) = redo_history.pop() {
+                    data.history.write().unwrap().push(data.text.clone());
+                    data.text = next;
+                    data.redo = true;
+                }
+                if redo_history.is_empty() {
+                    data.redo = false;
                 }
             }
         }
@@ -41,14 +59,22 @@ impl<W: Widget<HelloState>> Controller<HelloState, W> for KeyController {
     }
 
     fn update(&mut self, child: &mut W, ctx: &mut UpdateCtx<'_, '_>, old_data: &HelloState, data: &HelloState, env: &Env) {
-        if old_data.text != data.text && !data.undo {
+        if old_data.text != data.text && !data.undo && !data.redo {
             let mut history = data.history.write().unwrap();
             history.push(old_data.text.clone());
+            data.redo_history.write().unwrap().clear();
+        } else if data.text.is_empty() {
+            let mut history = data.history.write().unwrap();
+            history.clear();
+            data.redo_history.write().unwrap().clear();
         }
-        child.update(ctx, old_data, data, env);
+
+        let mut data_mut = data.clone();
+        data_mut.redo = !data_mut.redo_history.read().unwrap().is_empty();
+
+        child.update(ctx, old_data, &data_mut, env);
     }
 }
-
 
 fn build_root_widget() -> impl Widget<HelloState> {
     const TEXT_BOX_WIDTH: f64 = 1920.0;
@@ -144,6 +170,8 @@ fn build_root_widget() -> impl Widget<HelloState> {
                 .unwrap()
             {
                 true => {
+                    let mut history = _data.history.write().unwrap();
+                    history.clear();
                     _data.text = String::new();
                     _data.current_file_path = None; // Clear current file path
                 }
@@ -209,7 +237,9 @@ fn main() {
         current_file_path: None,
         window_title: String::from("Rusty Notepad"),
         history: Arc::new(RwLock::new(Vec::new())),
-        undo: false
+        redo_history: Arc::new(RwLock::new(Vec::new())), // Initialize redo history
+        undo: false,
+        redo: false,
     };
 
     AppLauncher::with_window(main_window)
