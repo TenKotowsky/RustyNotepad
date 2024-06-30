@@ -1,15 +1,19 @@
+#![windows_subsystem = "windows"]
 use std::fs::File;
 use std::io::{Read, Write};
-use druid::widget::{Flex, Button, TextBox};
-use druid::{AppLauncher, Data, Lens, Widget, WindowDesc, WidgetExt};
+use std::sync::{Arc, RwLock};
+use druid::widget::{Flex, Button, TextBox, Controller};
+use druid::{AppLauncher, Data, Lens, Widget, WindowDesc, WidgetExt, EventCtx, Event, Env, UpdateCtx};
 use native_dialog::{FileDialog, MessageDialog, MessageType};
+
 #[derive(Clone, Data, Lens)]
 struct HelloState {
     text: String,
     current_file_path: Option<String>,
     window_title: String,
+    history: Arc<RwLock<Vec<String>>>,
+    undo: bool
 }
-
 fn set_current_file(data: &mut HelloState, path: Option<String>) {
     data.current_file_path = path.clone();
     if let Some(path_str) = path {
@@ -18,6 +22,33 @@ fn set_current_file(data: &mut HelloState, path: Option<String>) {
         data.window_title = String::from("Rusty Notepad");
     }
 }
+
+pub struct KeyController;
+
+
+impl<W: Widget<HelloState>> Controller<HelloState, W> for KeyController {
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut HelloState, env: &Env) {
+        if let Event::KeyDown(key_event) = event {
+            if key_event.mods.ctrl() && key_event.key == druid::keyboard_types::Key::Character("z".into()) {
+                let mut history = data.history.write().unwrap();
+                if let Some(last) = history.pop() {
+                    data.text = last;
+                    data.undo = true;
+                }
+            }
+        }
+        child.event(ctx, event, data, env);
+    }
+
+    fn update(&mut self, child: &mut W, ctx: &mut UpdateCtx<'_, '_>, old_data: &HelloState, data: &HelloState, env: &Env) {
+        if old_data.text != data.text && !data.undo {
+            let mut history = data.history.write().unwrap();
+            history.push(old_data.text.clone());
+        }
+        child.update(ctx, old_data, data, env);
+    }
+}
+
 
 fn build_root_widget() -> impl Widget<HelloState> {
     const TEXT_BOX_WIDTH: f64 = 1920.0;
@@ -152,10 +183,12 @@ fn build_root_widget() -> impl Widget<HelloState> {
         .padding((0.0, 10.0));
 
     let textbox = TextBox::multiline()
+        .with_line_wrapping(false)
         .with_placeholder("Words, words, words")
         .lens(HelloState::text)
         .fix_width(TEXT_BOX_WIDTH)
-        .fix_height(TEXT_BOX_HEIGHT);
+        .fix_height(TEXT_BOX_HEIGHT)
+        .controller(KeyController);
 
     Flex::column()
         .with_child(buttons)
@@ -175,6 +208,8 @@ fn main() {
         text: String::new(),
         current_file_path: None,
         window_title: String::from("Rusty Notepad"),
+        history: Arc::new(RwLock::new(Vec::new())),
+        undo: false
     };
 
     AppLauncher::with_window(main_window)
