@@ -1,4 +1,5 @@
 #![windows_subsystem = "windows"]
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::{Arc, RwLock};
@@ -20,7 +21,7 @@ struct HelloState {
 fn set_current_file(data: &mut HelloState, path: Option<String>) {
     data.current_file_path = path.clone();
     if let Some(path_str) = path {
-        data.window_title = format!("Rusty Notepad {}", path_str);
+        data.window_title = format!("Rusty Notepad ({})", path_str);
     } else {
         data.window_title = String::from("Rusty Notepad");
     }
@@ -70,6 +71,7 @@ impl<W: Widget<HelloState>> Controller<HelloState, W> for KeyController {
         }
 
         let mut data_mut = data.clone();
+        data_mut.undo = !data_mut.history.read().unwrap().is_empty();
         data_mut.redo = !data_mut.redo_history.read().unwrap().is_empty();
 
         child.update(ctx, old_data, &data_mut, env);
@@ -148,6 +150,8 @@ fn build_root_widget() -> impl Widget<HelloState> {
                         match file.read_to_string(&mut s) {
                             Ok(_) => {
                                 _data.text = s;
+                                _data.redo_history.write().unwrap().clear(); // Clear redo history
+                                _data.history.write().unwrap().clear(); // Clear undo history
                                 set_current_file(_data, Some(String::from(path.display().to_string())));
                             }
                             _ => ()
@@ -170,14 +174,34 @@ fn build_root_widget() -> impl Widget<HelloState> {
                 .unwrap()
             {
                 true => {
-                    let mut history = _data.history.write().unwrap();
-                    history.clear();
+                    _data.redo_history.write().unwrap().clear(); // Clear redo history
+                    _data.history.write().unwrap().clear(); // Clear undo history
                     _data.text = String::new();
                     _data.current_file_path = None; // Clear current file path
                 }
                 _ => ()
             }
         }
+    };
+
+    let undo_handler = |_ctx: &mut druid::EventCtx, data: &mut HelloState, _env: &druid::Env| {
+        let mut history = data.history.write().unwrap();
+        if let Some(last) = history.pop() {
+            data.redo_history.write().unwrap().push(data.text.clone());
+            data.text = last;
+            data.redo = true;
+        }
+        data.undo = !history.is_empty();
+    };
+
+    let redo_handler = |_ctx: &mut druid::EventCtx, data: &mut HelloState, _env: &druid::Env| {
+        let mut redo_history = data.redo_history.write().unwrap();
+        if let Some(next) = redo_history.pop() {
+            data.history.write().unwrap().push(data.text.clone());
+            data.text = next;
+            data.undo = true;
+        }
+        data.redo = !redo_history.is_empty();
     };
 
     let new_button = Button::new("New")
@@ -200,6 +224,16 @@ fn build_root_widget() -> impl Widget<HelloState> {
         .fix_height(BUTTON_HEIGHT)
         .on_click(open_handler);
 
+    let undo_button = Button::new("Undo")
+        .fix_width(BUTTON_WIDTH)
+        .fix_height(BUTTON_HEIGHT)
+        .on_click(undo_handler);
+
+    let redo_button = Button::new("Redo")
+        .fix_width(BUTTON_WIDTH)
+        .fix_height(BUTTON_HEIGHT)
+        .on_click(redo_handler);
+
     let buttons = Flex::row()
         .with_child(new_button)
         .with_spacer(20.0)
@@ -208,6 +242,10 @@ fn build_root_widget() -> impl Widget<HelloState> {
         .with_child(save_as_button)
         .with_spacer(20.0)
         .with_child(open_button)
+        .with_spacer(20.0)
+        .with_child(undo_button)
+        .with_spacer(20.0)
+        .with_child(redo_button)
         .padding((0.0, 10.0));
 
     let textbox = TextBox::multiline()
